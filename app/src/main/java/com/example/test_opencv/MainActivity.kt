@@ -96,7 +96,7 @@ class MainActivity : AppCompatActivity() {
                 .build()
 
             imageAnalysis.setAnalyzer(cameraExecutor, ImageAnalysis.Analyzer { image ->
-                invertColorOnImage(image)
+                processAndDrawBorders(image)
             })
 
             try {
@@ -178,6 +178,49 @@ class MainActivity : AppCompatActivity() {
             Log.d("DEBUG", "Image closed successfully")
         }
     }
+
+    // Draw line on objects borders
+    private fun processAndDrawBorders(image: ImageProxy) {
+        try {
+            var matOrg = imageToMat(image) // Convert image to OpenCV Mat
+            matOrg = fixMatRotation(matOrg) // Fix rotation if necessary
+
+            val matGray = Mat()
+            val matEdges = Mat()
+            val matContours = matOrg.clone()
+
+            // Convert to grayscale
+            Imgproc.cvtColor(matOrg, matGray, Imgproc.COLOR_RGB2GRAY)
+
+            // Apply Canny edge detection
+            Imgproc.Canny(matGray, matEdges, 100.0, 200.0)
+
+            // Find contours
+            val contours = ArrayList<MatOfPoint>()
+            val hierarchy = Mat()
+            Imgproc.findContours(matEdges, contours, hierarchy, Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
+
+            // Draw contours (borders)
+            Imgproc.drawContours(matContours, contours, -1, Scalar(0.0, 255.0, 0.0), 3)
+
+            // Convert Mat to Bitmap
+            Imgproc.cvtColor(matContours, matContours, Imgproc.COLOR_BGR2RGB) // Fix green tint
+            val bitmap = Bitmap.createBitmap(matContours.cols(), matContours.rows(), Bitmap.Config.ARGB_8888)
+            Utils.matToBitmap(matContours, bitmap)
+
+            // Update UI on the main thread
+            runOnUiThread {
+                imageView.setImageBitmap(bitmap)
+                Log.d("DEBUG", "Object borders drawn")
+            }
+        } catch (e: Exception) {
+            Log.e("CameraX", "Error processing image: ${e.message}")
+        } finally {
+            image.close() // Ensure image is closed after processing
+            Log.d("DEBUG", "Image closed successfully")
+        }
+    }
+
 
     override fun onDestroy() {
         super.onDestroy()
