@@ -16,7 +16,6 @@ import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.lifecycle.LifecycleOwner
-import org.opencv.android.OpenCVLoader
 import org.opencv.android.Utils
 import org.opencv.core.*
 import org.opencv.imgproc.Imgproc
@@ -97,25 +96,7 @@ class MainActivity : AppCompatActivity() {
                 .build()
 
             imageAnalysis.setAnalyzer(cameraExecutor, ImageAnalysis.Analyzer { image ->
-                try {
-                    var matOrg = imageToMat(image) // Check if this crashes
-                    matOrg=fixMatRotation(matOrg)
-                    val matInverted = Mat()
-                    Core.bitwise_not(matOrg, matInverted)
-
-                    val bitmap = Bitmap.createBitmap(matInverted.cols(), matInverted.rows(), Bitmap.Config.ARGB_8888)
-                    Utils.matToBitmap(matInverted, bitmap)
-
-                    runOnUiThread {
-                        imageView.setImageBitmap(bitmap)
-                        Log.d("DEBUG", "ImageView flip applied")
-                    }
-                } catch (e: Exception) {
-                    Log.e("CameraX", "Error processing image: ${e.message}")
-                } finally {
-                    image.close() // Make sure the image is closed
-                    Log.d("DEBUG", "Image will be closed successfully")
-                }
+                invertColorOnImage(image)
             })
 
             try {
@@ -147,7 +128,7 @@ class MainActivity : AppCompatActivity() {
         Imgproc.cvtColor(yuv, mat, Imgproc.COLOR_YUV2RGB_NV21) // Convert YUV to RGB
         return mat
     }
-
+    //    Rotate the image
     private fun fixMatRotation(matOrg: Mat): Mat {
         val mat: Mat
         when (previewView!!.display.rotation) {
@@ -171,11 +152,37 @@ class MainActivity : AppCompatActivity() {
         }
         return mat
     }
+    //    Invert colors on the image
+    private fun invertColorOnImage(image: ImageProxy) {
+        try {
+            var matOrg = imageToMat(image) // Convert image to OpenCV Mat
+            matOrg = fixMatRotation(matOrg) // Fix rotation if necessary
+            val matInverted = Mat()
 
-//    override fun onDestroy() {
-//        super.onDestroy()
-//        cameraExecutor.shutdown()
-//    }
+            // Apply color inversion
+            Core.bitwise_not(matOrg, matInverted)
+
+            // Convert Mat to Bitmap
+            val bitmap = Bitmap.createBitmap(matInverted.cols(), matInverted.rows(), Bitmap.Config.ARGB_8888)
+            Utils.matToBitmap(matInverted, bitmap)
+
+            // Update UI on the main thread
+            runOnUiThread {
+                imageView.setImageBitmap(bitmap)
+                Log.d("DEBUG", "Image processing applied")
+            }
+        } catch (e: Exception) {
+            Log.e("CameraX", "Error processing image: ${e.message}")
+        } finally {
+            image.close() // Ensure image is closed after processing
+            Log.d("DEBUG", "Image closed successfully")
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        cameraExecutor.shutdown()
+    }
 
     companion object {
         private const val TAG = "MainActivity"
