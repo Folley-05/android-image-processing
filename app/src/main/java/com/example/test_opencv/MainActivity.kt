@@ -117,15 +117,19 @@ class MainActivity : AppCompatActivity() {
     //    Convert image from camera to mat format compatible with OpenCV
     private fun imageToMat(image: ImageProxy): Mat {
         val yBuffer = image.planes[0].buffer
+        val uBuffer = image.planes[1].buffer
+        val vBuffer = image.planes[2].buffer
         val ySize = yBuffer.remaining()
-        val nv21 = ByteArray(ySize)
+        val uSize = uBuffer.remaining()
+        val vSize = vBuffer.remaining()
+        val nv21 = ByteArray(ySize + uSize + vSize)
         yBuffer[nv21, 0, ySize]
-
+        vBuffer[nv21, ySize, vSize]
+        uBuffer[nv21, ySize + vSize, uSize]
         val yuv = Mat(image.height + image.height / 2, image.width, CvType.CV_8UC1)
         yuv.put(0, 0, nv21)
-
         val mat = Mat()
-        Imgproc.cvtColor(yuv, mat, Imgproc.COLOR_YUV2RGB_NV21) // Convert YUV to RGB
+        Imgproc.cvtColor(yuv, mat, Imgproc.COLOR_YUV2RGB_NV21, 3)
         return mat
     }
     //    Rotate the image
@@ -204,7 +208,7 @@ class MainActivity : AppCompatActivity() {
             Imgproc.drawContours(matContours, contours, -1, Scalar(0.0, 255.0, 0.0), 3)
 
             // Convert Mat to Bitmap
-            Imgproc.cvtColor(matContours, matContours, Imgproc.COLOR_BGR2RGB) // Fix green tint
+//            Imgproc.cvtColor(matContours, matContours, Imgproc.COLOR_BGR2RGB) // Fix green tint
             val bitmap = Bitmap.createBitmap(matContours.cols(), matContours.rows(), Bitmap.Config.ARGB_8888)
             Utils.matToBitmap(matContours, bitmap)
 
