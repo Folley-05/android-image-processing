@@ -7,7 +7,6 @@ import android.graphics.Bitmap
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
 import android.util.Log
-import android.view.Surface
 import android.widget.ImageView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -17,8 +16,10 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.lifecycle.LifecycleOwner
 import org.opencv.android.Utils
-import org.opencv.core.*
-import org.opencv.imgproc.Imgproc
+import org.opencv.core.Mat
+import java.io.ByteArrayOutputStream
+import java.io.OutputStream
+import java.net.Socket
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -29,11 +30,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var imageView: ImageView
     private var camera: Camera? = null
 
+    private val YOUR_SERVER_PORT: Int = 3500
+    private val YOUR_SERVER_ADDRESS: String ="192.168.43.201"
+
     // Initialise the view
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        //  Initialise variable
         previewView = findViewById(R.id.previewView)
         cameraExecutor = Executors.newSingleThreadExecutor()
         imageView=findViewById(R.id.imageView)
@@ -52,7 +57,7 @@ class MainActivity : AppCompatActivity() {
     private val REQUIRED_PERMISSIONS = arrayOf(
         Manifest.permission.CAMERA,
         Manifest.permission.RECORD_AUDIO,
-//        Manifest.permission.WRITE_EXTERNAL_STORAGE
+    //  Manifest.permission.WRITE_EXTERNAL_STORAGE
     )
     // Function to check if all required permissions are granted
     private fun checkPermissions(): Boolean {
@@ -75,7 +80,7 @@ class MainActivity : AppCompatActivity() {
             } else {
                 // Some permissions denied → Show a message and close the app
                 Toast.makeText(this, "Permissions are required for the app to function.", Toast.LENGTH_LONG).show()
-//                finish()
+                // finish()
             }
         }
     }
@@ -87,16 +92,34 @@ class MainActivity : AppCompatActivity() {
             // initialise the camera process and add image analyzer
             val cameraProvider = cameraProviderFuture.get()
             val preview = Preview.Builder().build()
-            // preview.setSurfaceProvider(previewView.surfaceProvider)
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
             // add image processing
             val imageAnalysis = ImageAnalysis.Builder()
-//                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
 
+            // process the image
             imageAnalysis.setAnalyzer(cameraExecutor, ImageAnalysis.Analyzer { image ->
-                processAndDrawBorders(image)
+                try {
+
+                    var matOrg= imageToMat(image)
+                    matOrg= fixMatRotation(matOrg, previewView)
+                    val bitmap= processAndDrawBorders(matOrg)
+
+                    // Send to server
+                    Log.d("DEBUG", "Now send image to server")
+                    sendImageToServer(bitmap)
+
+                    // Update UI on the main thread
+                    runOnUiThread {
+                        imageView.setImageBitmap(bitmap)
+                        Log.d("DEBUG", "Object borders drawn")
+                    }
+                } catch(e: Exception) {
+                    Log.e("CameraX", "Error processing image: ${e.message}")
+                } finally {
+                    image.close()
+                }
             })
 
             try {
@@ -108,121 +131,31 @@ class MainActivity : AppCompatActivity() {
                 camera=cameraProvider.bindToLifecycle(this as LifecycleOwner, cameraSelector, preview, imageAnalysis)
                 preview.setSurfaceProvider(previewView.createSurfaceProvider(camera!!.cameraInfo))
             } catch (e: Exception) {
-                Log.e("CameraX", "Error binding use cases: ${e.message}")
+                Log.e("CameraX", "Error processing camera images ${e.message}")
                 Toast.makeText(this, "Failed to start camera", Toast.LENGTH_SHORT).show()
             }
         }, ContextCompat.getMainExecutor(this))
     }
 
-    //    Convert image from camera to mat format compatible with OpenCV
-    private fun imageToMat(image: ImageProxy): Mat {
-        val yBuffer = image.planes[0].buffer
-        val uBuffer = image.planes[1].buffer
-        val vBuffer = image.planes[2].buffer
-        val ySize = yBuffer.remaining()
-        val uSize = uBuffer.remaining()
-        val vSize = vBuffer.remaining()
-        val nv21 = ByteArray(ySize + uSize + vSize)
-        yBuffer[nv21, 0, ySize]
-        vBuffer[nv21, ySize, vSize]
-        uBuffer[nv21, ySize + vSize, uSize]
-        val yuv = Mat(image.height + image.height / 2, image.width, CvType.CV_8UC1)
-        yuv.put(0, 0, nv21)
-        val mat = Mat()
-        Imgproc.cvtColor(yuv, mat, Imgproc.COLOR_YUV2RGB_NV21, 3)
-        return mat
-    }
-    //    Rotate the image
-    private fun fixMatRotation(matOrg: Mat): Mat {
-        val mat: Mat
-        when (previewView!!.display.rotation) {
-            Surface.ROTATION_0 -> {
-                mat = Mat(matOrg.cols(), matOrg.rows(), matOrg.type())
-                Core.transpose(matOrg, mat)
-                Core.flip(mat, mat, 1)
+    private fun sendImageToServer(bitmap: Bitmap) {
+        Thread {
+            try {
+                val socket = Socket(YOUR_SERVER_ADDRESS, YOUR_SERVER_PORT)
+                val outputStream: OutputStream = socket.getOutputStream()
+
+                // Convert Bitmap to ByteArray
+                val byteArrayOutputStream = ByteArrayOutputStream()
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 50, byteArrayOutputStream)
+                val byteArray = byteArrayOutputStream.toByteArray()
+
+                // Send data through socket
+                outputStream.write(byteArray)
+                outputStream.flush()
+                socket.close()
+            } catch (e: Exception) {
+                Log.d("DEBUG", "Error sending image: ${e.message}")
             }
-
-            Surface.ROTATION_90 -> mat = matOrg
-            Surface.ROTATION_270 -> {
-                mat = matOrg
-                Core.flip(mat, mat, -1)
-            }
-
-            else -> {
-                mat = Mat(matOrg.cols(), matOrg.rows(), matOrg.type())
-                Core.transpose(matOrg, mat)
-                Core.flip(mat, mat, 1)
-            }
-        }
-        return mat
-    }
-    //    Invert colors on the image
-    private fun invertColorOnImage(image: ImageProxy) {
-        try {
-            var matOrg = imageToMat(image) // Convert image to OpenCV Mat
-            matOrg = fixMatRotation(matOrg) // Fix rotation if necessary
-            val matInverted = Mat()
-
-            // Apply color inversion
-            Core.bitwise_not(matOrg, matInverted)
-
-            // Convert Mat to Bitmap
-            val bitmap = Bitmap.createBitmap(matInverted.cols(), matInverted.rows(), Bitmap.Config.ARGB_8888)
-            Utils.matToBitmap(matInverted, bitmap)
-
-            // Update UI on the main thread
-            runOnUiThread {
-                imageView.setImageBitmap(bitmap)
-                Log.d("DEBUG", "Image processing applied")
-            }
-        } catch (e: Exception) {
-            Log.e("CameraX", "Error processing image: ${e.message}")
-        } finally {
-            image.close() // Ensure image is closed after processing
-            Log.d("DEBUG", "Image closed successfully")
-        }
-    }
-
-    // Draw line on objects borders
-    private fun processAndDrawBorders(image: ImageProxy) {
-        try {
-            var matOrg = imageToMat(image) // Convert image to OpenCV Mat
-            matOrg = fixMatRotation(matOrg) // Fix rotation if necessary
-
-            val matGray = Mat()
-            val matEdges = Mat()
-            val matContours = matOrg.clone()
-
-            // Convert to grayscale
-            Imgproc.cvtColor(matOrg, matGray, Imgproc.COLOR_RGB2GRAY)
-
-            // Apply Canny edge detection
-            Imgproc.Canny(matGray, matEdges, 100.0, 200.0)
-
-            // Find contours
-            val contours = ArrayList<MatOfPoint>()
-            val hierarchy = Mat()
-            Imgproc.findContours(matEdges, contours, hierarchy, Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
-
-            // Draw contours (borders)
-            Imgproc.drawContours(matContours, contours, -1, Scalar(0.0, 255.0, 0.0), 3)
-
-            // Convert Mat to Bitmap
-//            Imgproc.cvtColor(matContours, matContours, Imgproc.COLOR_BGR2RGB) // Fix green tint
-            val bitmap = Bitmap.createBitmap(matContours.cols(), matContours.rows(), Bitmap.Config.ARGB_8888)
-            Utils.matToBitmap(matContours, bitmap)
-
-            // Update UI on the main thread
-            runOnUiThread {
-                imageView.setImageBitmap(bitmap)
-                Log.d("DEBUG", "Object borders drawn")
-            }
-        } catch (e: Exception) {
-            Log.e("CameraX", "Error processing image: ${e.message}")
-        } finally {
-            image.close() // Ensure image is closed after processing
-            Log.d("DEBUG", "Image closed successfully")
-        }
+        }.start()
     }
 
 
